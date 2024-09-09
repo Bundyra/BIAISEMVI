@@ -1,111 +1,105 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
-from PIL import Image, ImageTk, ImageDraw, ImageFont
+from tkinter import filedialog, messagebox, Scale
 import pygame
-import os
+import numpy as np
+import librosa
+from PIL import Image, ImageTk, ImageDraw, ImageFont
+import matplotlib.pyplot as plt
+from tensorflow.keras.models import load_model
+from sklearn.preprocessing import LabelEncoder
+import pickle
+
+model = load_model('genre_classifier_nn.h5')  # Load the Keras model
+with open('label_encoder.pkl', 'rb') as f:
+    le = pickle.load(f)
+with open('scaler.pkl', 'rb') as f:
+    scaler = pickle.load(f)
+
+current_file_path = None
 
 def open_file():
-    file_path = filedialog.askopenfilename(
-        filetypes=[("Audio Files", "*.mp3 *.wav"), ("All Files", "*.*")]
-    )
-    if file_path:
-        file_name = os.path.basename(file_path)
-        file_label.config(text=f"Now playing: {file_name}")
-        load_audio_player_controls(file_path)
+    global current_file_path
+    try:
+        file_path = filedialog.askopenfilename(
+            filetypes=[("Audio Files", "*.mp3 *.wav"), ("All Files", "*.*")]
+        )
+        if file_path:
+            current_file_path = file_path
+            messagebox.showinfo("Open File", f"Opening File: {file_path}")
+            features = extract_features_from_audio(file_path)
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to open file: {e}")
 
-def load_audio_player_controls(file_path):
-    def play_audio():
-        pygame.mixer.music.load(file_path)
-        pygame.mixer.music.play()
-        update_progress_bar()
+def play_file():
+    try:
+        if current_file_path:
+            pygame.mixer.music.load(current_file_path)
+            pygame.mixer.music.play()
+            audio, sfreq = librosa.load(current_file_path)
+            time = np.arange(0, len(audio)) / sfreq
+            plt.figure(num="Amplitude")
+            plt.plot(time, audio)
+            plt.xlabel("Time")
+            plt.ylabel("Sound Amplitude")
+            plt.show()
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to play file: {e}")
 
-    def stop_audio():
+def stop_file():
+    try:
         pygame.mixer.music.stop()
-        progress_bar.stop()
-        progress_bar["value"] = 0
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to stop file: {e}")
 
-    def pause_audio():
-        pygame.mixer.music.pause()
+def guess_genre():
+    global current_file_path
+    try:
+        if current_file_path:
+            features = extract_features_from_audio(current_file_path)
+            while len(features) < 15:
+                features.append(0)
+            scaled_features = scaler.transform([features])
+            predictions = model.predict(scaled_features)[0]
 
-    def unpause_audio():
-        pygame.mixer.music.unpause()
-        update_progress_bar()
+            all_labels = le.classes_
 
-    def update_progress_bar():
-        if pygame.mixer.music.get_busy():
-            current_pos = pygame.mixer.music.get_pos() / 1000
-            progress_bar["value"] = current_pos
-            root.after(1000, update_progress_bar)
+            data, sr = librosa.load(current_file_path)
+            X = librosa.stft(data)
+            Xdb = librosa.amplitude_to_db(abs(X))
+            plt.figure(figsize=(14, 6), num="Spectrogram")
+            librosa.display.specshow(Xdb, sr=sr, x_axis='time', y_axis='hz')
+            plt.colorbar()
 
-    def set_volume(volume):
-        # Convert volume to float
-        volume_float = float(volume)
-        # Round to nearest integer
-        volume_int = round(volume_float)
-        # Set volume for Pygame mixer
-        pygame.mixer.music.set_volume(volume_int / 100)
+            plt.figure(figsize=(10, 6), num="Genre Recognition")
+            plt.barh(all_labels, predictions * 100, color='skyblue')
+            plt.xlabel('Probability (%)')
+            plt.ylabel('Music Genre')
+            plt.title('Genre Prediction')
 
-    # Get the length of the song
-    audio_length = pygame.mixer.Sound(file_path).get_length()
+            for index, value in enumerate(predictions * 100):
+                plt.text(value, index, f'{value:.2f}%', va='center')
 
+            plt.show()
 
-    # Clear existing widgets in the player controls frame
-    for widget in player_controls_frame.winfo_children():
-        widget.destroy()
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to predict genre: {e}")
 
-    # Load and resize images for buttons
-    icon_size = (40, 40)  # Set the desired icon size
-    play_image = Image.open("play.png").resize(icon_size, Image.LANCZOS)
-    play_photo = ImageTk.PhotoImage(play_image)
-    pause_image = Image.open("pause.png").resize(icon_size, Image.LANCZOS)
-    pause_photo = ImageTk.PhotoImage(pause_image)
-    stop_image = Image.open("stop.png").resize(icon_size, Image.LANCZOS)
-    stop_photo = ImageTk.PhotoImage(stop_image)
-    unpause_image = Image.open("unpause.png").resize(icon_size, Image.LANCZOS)
-    unpause_photo = ImageTk.PhotoImage(unpause_image)
+def extract_features_from_audio(file_path):
+    y, sr = librosa.load(file_path, duration=30)
+    features = []
+    features.append(np.mean(librosa.feature.chroma_stft(y=y, sr=sr)))  # chroma_stft
+    features.append(np.mean(librosa.feature.rms(y=y)))  # rms
+    features.append(np.mean(librosa.feature.spectral_centroid(y=y, sr=sr)))  # spectral_centroid
+    features.append(np.mean(librosa.feature.spectral_bandwidth(y=y, sr=sr)))  # spectral_bandwidth
+    features.append(np.mean(librosa.feature.spectral_rolloff(y=y, sr=sr)))  # spectral_rolloff
+    features.append(np.mean(librosa.feature.zero_crossing_rate(y)))  # zero_crossing_rate
+    mfccs = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
+    features.extend(np.mean(mfccs.T, axis=0))  # MFCCs
+    return features
 
-    # Create buttons with images
-    play_button = tk.Button(player_controls_frame, image=play_photo, command=play_audio, bg="#3498db", borderwidth=0)
-    stop_button = tk.Button(player_controls_frame, image=stop_photo, command=stop_audio, bg="#3498db", borderwidth=0)
-    pause_button = tk.Button(player_controls_frame, image=pause_photo, command=pause_audio, bg="#3498db", borderwidth=0)
-    unpause_button = tk.Button(player_controls_frame, image=unpause_photo, command=unpause_audio, bg="#3498db", borderwidth=0)
-
-    # Keep a reference to the image objects to prevent garbage collection
-    play_button.image = play_photo
-    stop_button.image = stop_photo
-    pause_button.image = pause_photo
-    unpause_button.image = unpause_photo
-
-    # Pack buttons horizontally
-    play_button.pack(side=tk.LEFT, padx=10)
-    stop_button.pack(side=tk.LEFT, padx=10)
-    pause_button.pack(side=tk.LEFT, padx=10)
-    unpause_button.pack(side=tk.LEFT, padx=10)
-
-    # Create and display the progress bar
-    progress_bar = ttk.Progressbar(player_controls_frame, orient="horizontal", length=500, mode="determinate",
-                                   style="TProgressbar")
-    progress_bar.pack(side=tk.BOTTOM, pady=10, fill=tk.X)
-    progress_bar["maximum"] = audio_length
-
-    # Get the background color of the menu frame
-    menu_bg_color = menu_frame.cget("bg")
-
-    # Create a scale for volume control
-    volume_scale = tk.Scale(
-        player_controls_frame,
-        from_=0, to=100,
-        orient=tk.HORIZONTAL,
-        command=set_volume,
-        bg=menu_bg_color,  # Background color same as menu
-        troughcolor=menu_bg_color,  # Trough color same as menu
-        length=200  # Longer length
-    )
-    volume_scale.set(50)  # Set initial volume to 50%
-    volume_scale.pack(side=tk.BOTTOM, pady=10)
-
-def test_file():
-    messagebox.showinfo("Guess genre", "Guessing genre of the song.")
+def set_volume(val):
+    volume = float(val) / 100
+    pygame.mixer.music.set_volume(volume)
 
 def exit_app():
     root.quit()
@@ -117,21 +111,18 @@ def create_rounded_button_image(width, height, radius, color, text, text_color, 
     image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
 
-    # Draw rounded rectangle
     draw.rounded_rectangle(
         [(0, 0), (width, height)],
         radius=radius,
         fill=color
     )
 
-    # Calculate text size and position
     text_bbox = draw.textbbox((0, 0), text, font=font)
     text_width = text_bbox[2] - text_bbox[0]
     text_height = text_bbox[3] - text_bbox[1]
     text_x = (width - text_width) // 2
     text_y = (height - text_height) // 2
 
-    # Add text
     draw.text(
         (text_x, text_y),
         text,
@@ -141,62 +132,42 @@ def create_rounded_button_image(width, height, radius, color, text, text_color, 
 
     return ImageTk.PhotoImage(image)
 
-# Initialize Pygame mixer
 pygame.mixer.init()
 
-# Create the main window
 root = tk.Tk()
-root.title("AI PROJEKT")
-root.geometry("1366x768")  # Set the window size to 1366x768
-root.configure(bg="#3498db")  # Set the background color to blue
+root.title("Music Genre Recognition")
+root.geometry("800x768")
+root.configure(bg="#3498db")
 
-# Style the progress bar
-style = ttk.Style()
-style.theme_use('clam')
-style.configure("TProgressbar",
-                troughcolor='#3498db',  # Blue background
-                background='#000000',  # Black progress
-                thickness=5)  # Thinner progress bar
+menu_frame = tk.Frame(root, bg="#3498db")
+menu_frame.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
 
-# Create a frame to hold the menu buttons and center it
-menu_frame = tk.Frame(root, bg="#3498db")  # Set the background color of the frame to blue
-menu_frame.place(relx=0.5, rely=0.3, anchor=tk.CENTER)  # Adjusted position to leave space for controls
-
-# Button configurations
 button_width = 200
 button_height = 60
 button_radius = 30
-button_color = (0, 0, 255)  # Blue
-button_text_color = (255, 255, 0)  # Yellow
+button_color = (0, 0, 255)
+button_text_color = (255, 255, 0)
 
-# Define font
-font = ImageFont.truetype("arialbd.ttf", 20)  # Using Arial Bold
+font = ImageFont.truetype("arialbd.ttf", 20)
 
-# Create and place the menu buttons
 buttons = [
     ("Open", open_file),
-    ("Guess", test_file),
-    ("Exit", exit_app),
-    ("About", about_app)
+    ("Play", play_file),
+    ("Stop", stop_file),
+    ("Guess", guess_genre),
+    ("About", about_app),
+    ("Exit", exit_app)
 ]
 
 for text, command in buttons:
     image = create_rounded_button_image(button_width, button_height, button_radius, button_color, text, button_text_color, font)
-    button = tk.Label(menu_frame, image=image, cursor="hand2", bg="#3498db")  # Set the background color of the button to blue
-    button.image = image  # Keep a reference to prevent garbage collection
-    button.pack(side=tk.LEFT, padx=10, pady=10)
+    button = tk.Label(menu_frame, image=image, cursor="hand2", bg="#3498db")
+    button.image = image
+    button.pack(pady=10)
     button.bind("<Button-1>", lambda e, cmd=command: cmd())
 
-# Create a label to display the file name
-file_label = tk.Label(root, text="No file selected", bg="#3498db", fg="white", font=("Arial", 16))
-file_label.place(relx=0.5, rely=0.6, anchor=tk.CENTER)
+volume_slider = Scale(root, from_=0, to=100, orient=tk.VERTICAL, command=set_volume, bg="#3498db", fg="yellow", font=("Arial", 12), length=500)
+volume_slider.set(50)
+volume_slider.place(relx=0.95, rely=0.5, anchor=tk.CENTER)
 
-# Create a frame to hold the player controls and place it below the file label
-player_controls_frame = tk.Frame(root, bg="#3498db")
-player_controls_frame.place(relx=0.5, rely=0.7, anchor=tk.CENTER)
-
-# Create a progress bar to display the song progress
-progress_bar = ttk.Progressbar(player_controls_frame, orient="horizontal", length=500, mode="determinate", style="TProgressbar")
-
-# Start the main event loop
 root.mainloop()
