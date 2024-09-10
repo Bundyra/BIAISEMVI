@@ -1,15 +1,15 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox, Scale
 import pygame
-import pickle
 import numpy as np
 import librosa
 from PIL import Image, ImageTk, ImageDraw, ImageFont
 import matplotlib.pyplot as plt
+from tensorflow.keras.models import load_model
+from sklearn.preprocessing import LabelEncoder
+import pickle
 
-# Zapis modelu, enkodera i skalera
-with open('genre_classifier.pkl', 'rb') as f:
-    model = pickle.load(f)
+model = load_model('genre_classifier_nn.h5')  # Load the Keras model
 with open('label_encoder.pkl', 'rb') as f:
     le = pickle.load(f)
 with open('scaler.pkl', 'rb') as f:
@@ -36,9 +36,9 @@ def play_file():
             pygame.mixer.music.load(current_file_path)
             pygame.mixer.music.play()
             audio, sfreq = librosa.load(current_file_path)
-            time = np.arange(0, len(audio))/sfreq
+            time = np.arange(0, len(audio)) / sfreq
             plt.figure(num="Amplitude")
-            plt.plot(time,audio)
+            plt.plot(time, audio)
             plt.xlabel("Time")
             plt.ylabel("Sound Amplitude")
             plt.show()
@@ -59,18 +59,18 @@ def guess_genre():
             while len(features) < 15:
                 features.append(0)
             scaled_features = scaler.transform([features])
-            predictions = model.predict_proba(scaled_features)[0]
+            predictions = model.predict(scaled_features)[0]
 
             all_labels = le.classes_
 
             data, sr = librosa.load(current_file_path)
             X = librosa.stft(data)
             Xdb = librosa.amplitude_to_db(abs(X))
-            g = plt.figure(figsize=(14, 6), num="Spectogram")
+            plt.figure(figsize=(14, 6), num="Spectrogram")
             librosa.display.specshow(Xdb, sr=sr, x_axis='time', y_axis='hz')
             plt.colorbar()
 
-            f = plt.figure(figsize=(10, 6), num="Genre Recognition")
+            plt.figure(figsize=(10, 6), num="Genre Recognition")
             plt.barh(all_labels, predictions * 100, color='skyblue')
             plt.xlabel('Probability (%)')
             plt.ylabel('Music Genre')
@@ -83,8 +83,6 @@ def guess_genre():
 
     except Exception as e:
         messagebox.showerror("Error", f"Failed to predict genre: {e}")
-
-
 
 def extract_features_from_audio(file_path):
     y, sr = librosa.load(file_path, duration=30)
@@ -136,7 +134,6 @@ def create_rounded_button_image(width, height, radius, color, text, text_color, 
 
 pygame.mixer.init()
 
-# Create the main window
 root = tk.Tk()
 root.title("Music Genre Recognition")
 root.geometry("800x768")
